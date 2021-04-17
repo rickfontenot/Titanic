@@ -1,0 +1,708 @@
+---
+title: "Untitled"
+author: "Rick Fontenot"
+date: "4/17/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+Load Libraries
+```{r load-packages, include=FALSE}
+library(dplyr)
+library(tidyverse)
+library(caret)
+library(DataExplorer)
+library(gplots)
+library(graphics)
+library(corrplot)
+library(olsrr)
+library(ggpubr)
+library(rstatix)
+library(dplyr)
+library(tidyverse)
+library(visdat)
+library(GGally)
+library(usmap)
+library(mice)
+library(VIM)
+library(plotly)
+library(caret)
+library(e1071)
+library(class)
+library(maps)
+library(mapproj)
+library(stringr)
+library(ggplot2) 
+library(ggthemes)
+library(table1)
+library(DataExplorer)
+```
+Load Theme for plots
+
+```{r}
+theme_set(theme_fivethirtyeight())
+theme_update(axis.title = element_text()) #the default for fivethirtyeight is to not show axis labels, this removes that default so we can choose to specify and display axis titles
+theme_update(plot.title = element_text(hjust = 0.5)) # changing default to center all titles
+```
+
+Load Data from Kaggle
+
+```{r load data}
+titanic = read.csv("https://raw.githubusercontent.com/rickfontenot/Titanic/main/train.csv", header = TRUE)
+competition = read.csv("https://raw.githubusercontent.com/rickfontenot/Titanic/main/test.csv", header = TRUE)
+gender.sample = read.csv("https://raw.githubusercontent.com/rickfontenot/Titanic/main/gender_submission.csv", header = TRUE)
+
+
+```
+
+Investigate NA values to determine what needs resolution
+
+```{r}
+aggr_plot <- aggr(titanic, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(titanic), cex.axis=.7, gap=3, ylab=c("Percent data missing","Combinations Missing"))
+
+marginplot(titanic[c(4,5)])
+view(titanic)
+#20% of observations missing data for Age, no other missing values
+
+# NOTE Cabin is missing for ~80% observations too, it's just blank instead on NA
+
+aggr_plot <- aggr(competition, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(competition), cex.axis=.7, gap=3, ylab=c("Percent data missing","Combinations Missing"))
+
+marginplot(competition[c(4,5)])
+view(competition)
+#20% of observations missing data for Age, 2.4% missing Fare, no other missing values
+```
+Explore Categorical Variables vs Survival
+
+```{r}
+str(titanic)
+titanic$Sex <- as.factor(titanic$Sex)
+titanic$Embarked <- as.factor(titanic$Embarked)
+titanic$Age <- as.integer(titanic$Age)
+titanic$Fare <- as.integer(titanic$Fare)
+
+#Class 1 significant higher survival, Class 3 significant lower survival, Class 2 no significant difference
+Pclass = table(titanic$Survived, titanic$Pclass)
+mosaicplot(Pclass, shade = TRUE, las=2, main = "Pclass", pop = FALSE)
+Pclasschisq <- chisq.test(Pclass) 
+Pclasschisq #p-value = 2.2e-16
+
+#Significant higher survival for Female
+Sex = table(titanic$Survived, titanic$Sex)
+mosaicplot(Sex, shade = TRUE, las=2, main = "Sex", pop = FALSE)
+Sexchisq <- chisq.test(Sex) 
+Sexchisq #p-value = 2.2e-16
+
+#Note SibSp=1 is significant, other values are not, is there something to 1? Create new feature?
+SibSp = table(titanic$Survived, titanic$SibSp)
+mosaicplot(SibSp, shade = TRUE, las=2, main = "SibSp", pop = FALSE)
+SibSpchisq <- chisq.test(SibSp) 
+SibSpchisq #p-value = 1.559e-6
+
+#Note Parch=1 is significant, other values are not, is there something to 1? Create new feature for Alone?
+Parch = table(titanic$Survived, titanic$Parch)
+mosaicplot(Parch, shade = TRUE, las=2, main = "Parch", pop = FALSE)
+Parchchisq <- chisq.test(Parch) 
+Parchchisq #p-value = 9.7e-5
+
+#Note Too many values for Cabin, need to study distribution, create new feature
+Cabin = table(titanic$Survived, titanic$Cabin)
+mosaicplot(Cabin, shade = TRUE, las=2, main = "Cabin", pop = FALSE)
+Cabinchisq <- chisq.test(Cabin) 
+Cabinchisq #p-value = 1.6e-6
+
+#Note Significant higher survival for Embarking at C, S may have small difference but not as significant
+Embarked = table(titanic$Survived, titanic$Embarked)
+mosaicplot(Embarked, shade = TRUE, las=2, main = "Embarked", pop = FALSE)
+Embarkedchisq <- chisq.test(Embarked) 
+Embarkedchisq #p-value = 1.6e-6
+
+```
+Explore Numerical Variables vs. Survival
+
+```{r}
+str(titanic)
+
+Numerical <- titanic %>% select(PassengerId, Age, SibSp, Parch, Fare, Survived)
+
+Numerical_long <- gather(Numerical, key="variable", value="value",-c(PassengerId,Survived))
+
+stat.test <- Numerical_long %>%
+  group_by(variable) %>%
+  t_test(value ~ Survived) %>%
+  adjust_pvalue(method = "BH") %>%
+  add_significance()
+
+#Sort and display numerical variables with highest significant difference by Attrition
+stat.test <- stat.test %>% select(p, everything())
+stat.test <- stat.test[order(stat.test$p),] 
+stat.test
+
+#Fare p-value=2.62e-11  -> plot survival vs. Fare
+#Parch p-value=1.34e-2 -> plot survival vs. Parch
+#Age p-value = 4e-2 -> plot survival vs. Age
+#SibSp p-value = 0.23 but from chi square above know that SibSp=1 is significant
+
+```
+
+Explore the "Fare" Variable
+
+```{r fare}
+
+titanic %>% ggplot(aes(x = Fare)) + geom_histogram(binwidth=10) + ggtitle("Fare") + xlab("Fare") + ylab("Count")
+
+Fare <- titanic %>% select(Survived,Fare) %>% group_by(Fare) %>% summarise(Survival=mean(Survived),count=n())
+plot(Fare$Fare,Fare$Survival)
+
+titanic["FareBin"] <- ifelse(titanic$Fare < 6, "00-05",
+                             ifelse((titanic$Fare > 5 & titanic$Fare <11), "06-10",
+                             ifelse((titanic$Fare > 10 & titanic$Fare <16), "11-15",
+                             ifelse((titanic$Fare > 15 & titanic$Fare <21), "16-20",
+                             ifelse((titanic$Fare > 20 & titanic$Fare <31), "21-30",
+                             ifelse((titanic$Fare > 30 & titanic$Fare <41), "31-40",
+                             ifelse((titanic$Fare > 40 & titanic$Fare <51), "41-50",
+                             ifelse((titanic$Fare > 50 & titanic$Fare <61), "51-60",
+                             ifelse((titanic$Fare > 60 & titanic$Fare <71), "61-70",
+                             ifelse((titanic$Fare > 70 & titanic$Fare <81), "71-80",
+                             ifelse((titanic$Fare > 80 & titanic$Fare <91), "81-90",
+                             ifelse((titanic$Fare > 90 & titanic$Fare <100), "91-99",
+                                                                        "99+"))))))))))))
+
+Fare2 <- titanic %>% select(Survived,FareBin) %>% group_by(FareBin) %>% summarise(Survival=mean(Survived),count=n())
+Fare2 %>% ggplot(aes(x = FareBin, y=Survival)) + geom_col() + ggtitle("Fare") + xlab("Fare") + ylab("Count")
+
+plot(titanic$Fare,titanic$Pclass)
+plot(titanic$Fare,titanic$Age)
+plot(titanic$Fare,titanic$Sex)
+plot(titanic$Fare,titanic$Embarked)
+
+titanic %>% select(Fare, Embarked)  %>% ggplot(aes(x=Embarked,y=Fare)) + 
+  geom_boxplot()+ labs(title= "Fare by Embark Location" , x = "Embarked", y= "Fare")
+
+titanic %>% select(Fare, Pclass)  %>% ggplot(aes(x=Pclass,y=Fare)) + 
+  geom_boxplot()+ coord_flip()+ labs(title= "Fare by Pclass" , x = "Pclass", y= "Fare")
+
+titanic %>% select(Fare, Sex)  %>% ggplot(aes(x=Sex,y=Fare)) + 
+  geom_boxplot()+ labs(title= "Fare by Gender" , x = "Gender", y= "Fare")
+
+FareBin = table(titanic$Survived, titanic$FareBin)
+mosaicplot(FareBin, shade = TRUE, las=2, main = "FareBin", pop = FALSE)
+FareBinchisq <- chisq.test(FareBin) 
+FareBinchisq #p-value = 2.2e-16 this is lower for binned Fare than for continuous raw variable
+
+#Fare is for whole booking group, adjust to individual guest fare price
+titanic["AdjFare"] = titanic$Fare/(titanic$Parch + titanic$SibSp + 1)
+
+AdjFare = table(titanic$Survived, titanic$AdjFare)
+mosaicplot(AdjFare, shade = TRUE, las=2, main = "AdjFare", pop = FALSE)
+AdjFarechisq <- chisq.test(AdjFare) 
+AdjFarechisq #p-value = 4.7e-12
+
+
+titanic %>% ggplot(aes(x = AdjFare)) + geom_histogram(binwidth=5) + ggtitle("Fare per person") + xlab("Fare") + ylab("Count")
+
+AdjFare <- titanic %>% select(Survived,AdjFare) %>% group_by(AdjFare) %>% summarise(Survival=mean(Survived),count=n())
+plot(AdjFare$AdjFare,AdjFare$Survival)
+
+titanic["AdjFareBin"] <- ifelse(titanic$AdjFare < 6, "00-05",
+                             ifelse((titanic$AdjFare > 5 & titanic$AdjFare <11), "06-10",
+                             ifelse((titanic$AdjFare > 10 & titanic$AdjFare <16), "11-15",
+                             ifelse((titanic$AdjFare > 15 & titanic$AdjFare <21), "16-20",
+                             ifelse((titanic$AdjFare > 20 & titanic$AdjFare <31), "21-30",
+                             ifelse((titanic$AdjFare > 30 & titanic$AdjFare <41), "31-40",
+                             ifelse((titanic$AdjFare > 40 & titanic$AdjFare <51), "41-50",
+                             ifelse((titanic$AdjFare > 50 & titanic$AdjFare <61), "51-60",
+                             ifelse((titanic$AdjFare > 60 & titanic$AdjFare <71), "61-70",
+                             ifelse((titanic$AdjFare > 70 & titanic$AdjFare <81), "71-80",
+                             ifelse((titanic$AdjFare > 80 & titanic$AdjFare <91), "81-90",
+                             ifelse((titanic$AdjFare > 90 & titanic$AdjFare <100), "91-99",
+                                                                        "99+"))))))))))))
+
+Fare2 <- titanic %>% select(Survived,AdjFareBin) %>% group_by(AdjFareBin) %>% summarise(Survival=mean(Survived),count=n())
+Fare2 %>% ggplot(aes(x = AdjFareBin, y=Survival)) + geom_col() + ggtitle("FareBin per person") + xlab("AdjFare") + ylab("Count")
+
+plot(titanic$AdjFare,titanic$Pclass)
+plot(titanic$AdjFare,titanic$Age)
+plot(titanic$AdjFare,titanic$Sex)
+plot(titanic$AdjFare,titanic$Embarked)
+
+titanic %>% select(AdjFare, Embarked)  %>% ggplot(aes(x=Embarked,y=AdjFare)) + 
+  geom_boxplot()+ labs(title= "AdjFare by Embark Location" , x = "Embarked", y= "AdjFare")
+
+titanic %>% select(AdjFare, Pclass)  %>% ggplot(aes(x=Pclass,y=AdjFare)) + 
+  geom_boxplot()+ coord_flip()+ labs(title= "AdjFare by Pclass" , x = "Pclass", y= "AdjFare")
+
+titanic %>% select(AdjFare, Sex)  %>% ggplot(aes(x=Sex,y=AdjFare)) + 
+  geom_boxplot()+ labs(title= "AdjFare by Gender" , x = "Gender", y= "AdjFare")
+
+AdjFareBin = table(titanic$Survived, titanic$AdjFareBin)
+mosaicplot(AdjFareBin, shade = TRUE, las=2, main = "AdjFareBin", pop = FALSE)
+AdjFareBinchisq <- chisq.test(AdjFareBin) 
+AdjFareBinchisq #p-value = 1.27e-14 this is higher than the non-adjusted Fare Bin
+```
+
+Explore Name and parse into titles, separate by age, do matching surnames equal families
+
+```{r name}
+titanic$Title <- substring(titanic$Name,regexpr(",",titanic$Name)+2,regexpr("\\.",titanic$Name)-1)
+titanic$Surname <- substring(titanic$Name,0,regexpr(",",titanic$Name)-1)
+
+Title = table(titanic$Survived, titanic$Title)
+mosaicplot(Title, shade = TRUE, las=2, main = "Title", pop = FALSE)
+Titlechisq <- chisq.test(Title) 
+Titlechisq #p-value = 2.2e-16
+
+titanic$Gender[titanic$Title %in% c("Capt","Don","Major","Col","Rev","Dr","Sir","Mr","Jonkheer")] <- "man"
+titanic$Gender[titanic$Title %in% c("Dona","the Countess","Mme","Mlle","Ms","Miss","Lady","Mrs")] <- "woman"
+titanic$Gender[titanic$Title %in% c("Master")] <- "boy"
+view(titanic)
+
+titanic %>% ggplot(aes(x = Age)) + geom_histogram(binwidth=2) + ggtitle("Age") + xlab("Age") + ylab("Count") + facet_wrap(~Gender,ncol=1)
+
+titanic$Gender[titanic$Gender=="woman" & titanic$Age<11] <- "girl"
+
+titanic %>% ggplot(aes(x = Age)) + geom_histogram(binwidth=2) + ggtitle("Age") + xlab("Age") + ylab("Count") + facet_wrap(~Gender,ncol=1)
+
+Gender = table(titanic$Survived, titanic$Gender)
+mosaicplot(Gender, shade = TRUE, las=2, main = "Title", pop = FALSE)
+Genderchisq <- chisq.test(Gender) 
+Genderchisq #p-value = 2.2e-16
+
+titanic %>% ggplot(mapping=aes(y=Sex, x=Gender, color=Survived)) + geom_point(size=1.5, position="jitter")+  labs(title="Sex vs Gender")
+```
+
+Explore Ticket and parse into Prefix vs number, look for duplicates, do duplicates equal family members?
+
+```{r ticket}
+titanic$Ticket_Pre <- sapply(titanic$Ticket, FUN=function(x) {ifelse(str_detect(x, " "),str_split(x, " ")[[1]][1],'None')})
+titanic$Ticket_Pre <- as.factor(str_to_upper(str_replace_all(titanic$Ticket_Pre, "[./]", "")))
+titanic$Ticket_Num <- sapply(titanic$Ticket, FUN=function(x) {ifelse(str_detect(x, " "),str_split(x, " ")[[1]][2], as.character(x))})
+
+Ticket = table(titanic$Survived, titanic$Ticket)
+mosaicplot(Ticket, shade = TRUE, las=2, main = "Ticket", pop = FALSE)
+Ticketchisq <- chisq.test(Ticket) 
+Ticketchisq #p-value = 0.01 too many values not significant
+
+Ticket_Pre = table(titanic$Survived, titanic$Ticket_Pre)
+mosaicplot(Ticket_Pre, shade = TRUE, las=2, main = "Ticket_Pre", pop = FALSE)
+Ticket_Prechisq <- chisq.test(Ticket) 
+Ticket_Prechisq #p-value = 0.01 but prefix PC does show significance
+
+titanic["PCticket"] <- "NO"
+titanic$PCticket[titanic$Ticket_Pre=="PC"] <- "YES"
+
+PCticket = table(titanic$Survived, titanic$PCticket)
+mosaicplot(PCticket, shade = TRUE, las=2, main = "PCticket", pop = FALSE)
+PCticketchisq <- chisq.test(PCticket) 
+PCticketchisq #p-value = 2.11e-5
+```
+
+Explore Cabin and parse the deck vs. the room number
+
+```{r cabin}
+titanic$Deck <- substr(titanic$Cabin, 1, 1)
+titanic$Deck[titanic$Deck == ""] <- "Unkown"
+
+Cabin = table(titanic$Survived, titanic$Cabin)
+mosaicplot(Cabin, shade = TRUE, las=2, main = "Cabin", pop = FALSE)
+Cabinchisq <- chisq.test(Cabin) 
+Cabinchisq #p-value = 1.6e-06 significant but many unique values based on room numbers
+
+Deck = table(titanic$Survived, titanic$Deck)
+mosaicplot(Deck, shade = TRUE, las=2, main = "Deck", pop = FALSE)
+Deckchisq <- chisq.test(Deck) 
+Deckchisq #p-value = 2.2e-16 
+```
+
+Explore Age Variable
+
+```{r age}
+titanic %>% ggplot(aes(x = Age)) + geom_histogram(binwidth=5) + ggtitle("Age") + xlab("Age") + ylab("Count")
+
+Age <- titanic %>% select(Survived,Age) %>% group_by(Age) %>% summarise(Survival=mean(Survived),count=n())
+plot(Age$Age,Age$Survival)
+
+titanic["AgeBin"] <- ifelse(titanic$Age < 6, "00-05",
+                             ifelse((titanic$Age > 5 & titanic$Age <11), "06-10",
+                             ifelse((titanic$Age > 10 & titanic$Age <16), "11-15",
+                             ifelse((titanic$Age > 15 & titanic$Age <21), "16-20",
+                             ifelse((titanic$Age > 20 & titanic$Age <31), "21-30",
+                             ifelse((titanic$Age > 30 & titanic$Age <41), "31-40",
+                             ifelse((titanic$Age > 40 & titanic$Age <51), "41-50",
+                             ifelse((titanic$Age > 50 & titanic$Age <61), "51-60",
+                             ifelse((titanic$Age > 60 & titanic$Age <71), "61-70",
+                             ifelse((titanic$Age > 70 & titanic$Age <81), "71-80",
+                             ifelse((titanic$Age > 80 & titanic$Age <91), "81-90",
+                             ifelse((titanic$Age > 90 & titanic$Age <100), "91-99",
+                                                                        "99+"))))))))))))
+
+Age2 <- titanic %>% select(Survived,AgeBin) %>% group_by(AgeBin) %>% summarise(Survival=mean(Survived),count=n())
+Age2 %>% ggplot(aes(x = AgeBin, y=Survival)) + geom_col() + ggtitle("Fare") + xlab("Fare") + ylab("Survival Rate")
+
+AgeBin = table(titanic$Survived, titanic$AgeBin)
+mosaicplot(AgeBin, shade = TRUE, las=2, main = "AgeBin", pop = FALSE)
+AgeBinchisq <- chisq.test(FareBin) 
+AgeBinchisq #p-value = 2.2e-16 much lower thn continuous variable, Bin under 5years is significant
+```
+Explore Regression for Age to replace missing values
+
+```{r age regression}
+
+#Split Train & Test
+Age_cor <- titanic %>% select(-PassengerId,-Name,-AgeBin,-Ticket,-Cabin)
+trainIndices = sample(seq(1:length(Age_cor$Age)),round(.7*length(Age_cor$Age)))
+trainAge_cor = Age_cor[trainIndices,]
+testAge_cor = Age_cor[-trainIndices,]
+
+#Build Model with all variables to create baseline, then use base model for selection methods
+model <- lm(Age ~ ., data = trainAge_cor)
+summary(model)
+
+#Variable Selection Methods
+
+#Forward step selection 6 parameters included, RMSE = 12, Adj. R2=0.34
+step.forward <- ols_step_forward_p(model)
+step.forward
+
+#Backward step selection 3 parameters removed, RMSE = 12, Adj. R2=0.34
+step.backward <- ols_step_backward_p(model)
+step.backward
+
+#Decision Tree to predict Age
+library(rpart)
+#install.packages("rattle")
+library(rattle)
+library(rpart.plot)
+
+tree.age = rpart(Age~., data=trainAge_cor)
+print(tree.age$cptable)
+
+fancyRpartPlot(tree.age)
+
+cp <- min(tree.age$cptable[,1])
+pruned.tree.age <- prune(tree.age, cp=cp)
+
+testAge_cor_NAfilter <- testAge_cor %>% filter(Age != "NA")
+tree.age.predict <- predict(pruned.tree.age, testAge_cor_NAfilter, type="vector")
+str(tree.age.predict)
+str(testAge_cor_NAfilter$Age)
+confusionMatrix(tree.age.predict, testAge_cor_NAfilter$Age)
+
+tree.age.predict.int <- as.integer(tree.age.predict)
+str(tree.age.predict.int)
+str(testAge_cor_NAfilter$Age)
+confusionMatrix(tree.age.predict.int, testAge_cor_NAfilter$Age)
+
+plot(tree.age.predict.int, testAge_cor_NAfilter$Age)
+```
+
+
+
+Explore Decision Tree for AgeBin to replace missing values
+
+```{r age regression}
+
+#Split Train & Test
+Age_cor <- titanic %>% select(-PassengerId,-Name,-Age,-Ticket,-Cabin) %>% filter(AgeBin != "NA")
+Age_cor$AgeBin <- as.factor(Age_cor$AgeBin)
+trainIndices = sample(seq(1:length(Age_cor$Age)),round(.7*length(Age_cor$Age)))
+trainAge_cor = Age_cor[trainIndices,]
+testAge_cor = Age_cor[-trainIndices,]
+
+#Decision Tree to predict Age
+library(rpart)
+#install.packages("rattle")
+library(rattle)
+library(rpart.plot)
+
+tree.age = rpart(AgeBin~., data=trainAge_cor)
+print(tree.age$cptable)
+
+fancyRpartPlot(tree.age)
+
+cp <- min(tree.age$cptable[,1])
+pruned.tree.age <- prune(tree.age, cp=cp)
+
+tree.age.predict <- predict(pruned.tree.age, testAge_cor, type="class")
+str(tree.age.predict)
+str(testAge_cor$AgeBin)
+confusionMatrix(tree.age.predict, testAge_cor$AgeBin)
+
+plot(tree.age.predict.int, testAge_cor$AgeBin)
+```
+
+
+Explore Correlations and relationships between variables
+
+```{r corr-EDA}
+#Create function to summarize the most significant correlations since there are too many variables for one plot
+corr_simple <- function(data=df,sig=0.5){
+  #convert data to numeric in order to run correlations
+  #convert to factor first to keep the integrity of the data - each value will become a number rather than turn into NA
+  df_cor <- data %>% mutate_if(is.character, as.factor)
+  df_cor <- df_cor %>% mutate_if(is.factor, as.numeric)
+  #run a correlation and drop the insignificant ones
+  corr <- cor(df_cor)
+  #prepare to drop duplicates and correlations of 1     
+  corr[lower.tri(corr,diag=TRUE)] <- NA 
+  #drop perfect correlations
+  corr[corr == 1] <- NA 
+  #turn into a 3-column table
+  corr <- as.data.frame(as.table(corr))
+  #remove the NA values from above 
+  corr <- na.omit(corr) 
+  #select significant values  
+  corr <- subset(corr, abs(Freq) > sig) 
+  #sort by highest correlation
+  corr <- corr[order(-abs(corr$Freq)),] 
+  #print table
+  print(corr)
+  #turn corr back into matrix in order to plot with corrplot
+  mtx_corr <- reshape2::acast(corr, Var1~Var2, value.var="Freq")
+  
+  #plot correlations visually
+  corrplot(mtx_corr, is.corr=FALSE, tl.col="black", na.label=" ")
+}
+corr_simple(titanic)
+
+#High Correlations between:
+  
+```
+
+Age vs Class relationship to Survival
+
+```{r age*class}
+titanic["AgeClass"]=titanic$Age * titanic$Pclass
+
+stat.test <- titanic %>%
+  t_test(AgeClass ~ Survived) %>%
+  adjust_pvalue(method = "BH") %>%
+  add_significance()
+
+#Sort and display numerical variables with highest significant difference by Attrition
+stat.test <- stat.test %>% select(p, everything())
+stat.test <- stat.test[order(stat.test$p),] 
+stat.test #p-value 8.67e-22 extremely low, the interaction between Age & Class high impact on survival
+
+titanic %>% ggplot(mapping=aes(y=Age, x=Pclass, color=Survived)) + geom_point(size=1.5, position="jitter")+  labs(title="Class vs Age")
+```
+Explore feature for people traveling alone using Parch and SibSp
+
+```{r alone}
+
+titanic %>% ggplot(mapping=aes(y=Parch, x=SibSp, color=Survived)) + geom_point(size=1.5, position="jitter")+  labs(title="Parch vs SibSp")
+
+ParchSibsp = table(titanic$Parch, titanic$SibSp)
+
+titanic["TravelGroup"] = titanic$Parch + titanic$SibSp
+
+TravelGroup = table(titanic$Survived, titanic$TravelGroup)
+mosaicplot(TravelGroup, shade = TRUE, las=2, main = "TravelGroup", pop = FALSE)
+TravelGroupchisq <- chisq.test(TravelGroup) 
+TravelGroupchisq #p-value = 3.58e-14 lower survival alone, higher survival for 1,2,3, no difference on others
+
+titanic["Alone"] = "NO"
+titanic$Alone[titanic$TravelGroup==0] <- "YES"
+
+Alone = table(titanic$Survived, titanic$Alone)
+mosaicplot(Alone, shade = TRUE, las=2, main = "Alone", pop = FALSE)
+Alonechisq <- chisq.test(Alone) 
+Alonechisq #p-value = 1.973e-09
+
+titanic["GroupSize"] = "Alone"
+titanic$GroupSize[titanic$TravelGroup>0 & titanic$TravelGroup<4] <- "Small"
+titanic$GroupSize[titanic$TravelGroup>3] <- "Large"
+
+GroupSize = table(titanic$Survived, titanic$GroupSize)
+mosaicplot(GroupSize, shade = TRUE, las=2, main = "GroupSize", pop = FALSE)
+GroupSizechisq <- chisq.test(GroupSize) 
+GroupSizechisq #p-value = 2.2e-16
+
+```
+
+Decision Tree model for Survival
+
+```{r decision tree}
+#Decision Tree to predict Survival
+library(rpart)
+#install.packages("rattle")
+library(rattle)
+library(rpart.plot)
+
+features1 <- c("Survived","AgeClass","AgeBin","Pclass","Sex","FareBin","Deck","GroupSize","Embarked","PCticket")
+
+#Split Train & Test
+TreeInput <- titanic %>% select(Survived,AgeClass,AgeBin,Pclass,Sex,FareBin,Deck,GroupSize,Embarked,PCticket) %>% filter(AgeBin != "NA")
+TreeInput$AgeBin <- as.factor(TreeInput$AgeBin)
+
+view(TreeInput)
+
+trainIndices = sample(seq(1:length(TreeInput$Survived)),round(.7*length(TreeInput$Survived)))
+trainTreeInput = TreeInput[trainIndices,]
+testTreeInput = TreeInput[-trainIndices,]
+
+
+tree.survived = rpart(Survived~., data=trainTreeInput)
+print(tree.survived$cptable)
+
+fancyRpartPlot(tree.survived)
+
+cp <- min(tree.survived$cptable[,1])
+pruned.tree.survived <- prune(tree.survived, cp=cp)
+
+fancyRpartPlot(pruned.tree.survived)
+
+testTreeInput["SurvivalProbability"] <- predict(pruned.tree.survived, testTreeInput, type="vector")
+
+testTreeInput["Prediction"] = 0
+testTreeInput$Prediction[testTreeInput$SurvivalProbability>0.5] = 1
+testTreeInput$Prediction=as.factor(testTreeInput$Prediction)
+testTreeInput$Survived=as.factor(testTreeInput$Survived)
+
+confusionMatrix(testTreeInput$Prediction, testTreeInput$Survived)
+#Accuracy 80.84%
+
+plot(testTreeInput$Prediction, testTreeInput$Survived)
+
+testTreeInput %>% ggplot(aes(x=as.character(Survived),y=Prediction)) + 
+  geom_boxplot()+ labs(title= "Prediction vs Survived" , x = "Survived", y= "Prediction")
+
+testTreeInput %>% ggplot(aes(x=as.character(Survived),y=Prediction)) + 
+  geom_boxplot()+ labs(title= "Prediction vs Survived" , x = "Survived", y= "Prediction")
+
+testTreeInput %>% ggplot(aes(x = SurvivalProbability, fill=Survived)) + geom_histogram() +
+ggtitle("Probability Survived by Actual Survival") + xlab("Probability") + ylab("Count") +facet_wrap(~Survived,ncol=1)
+```
+
+knn model
+
+```{r knn}
+features1 <- c("Survived","AgeClass","AgeBin","Pclass","Sex","FareBin","Deck","GroupSize","Embarked","PCticket")
+
+#Split Train & Test
+knn.input <- titanic %>% select(features1) %>% filter(AgeBin != "NA")
+#Convert Categorical to numeric
+knn.input$AgeBin <- as.factor(knn.input$AgeBin)
+knn.input$AgeBin <- as.numeric(knn.input$AgeBin)
+knn.input$Sex <- as.factor(knn.input$Sex)
+knn.input$Sex <- as.numeric(knn.input$Sex)
+knn.input$FareBin <- as.factor(knn.input$FareBin)
+knn.input$FareBin <- as.numeric(knn.input$FareBin)
+knn.input$Deck <- as.factor(knn.input$Deck)
+knn.input$Deck <- as.numeric(knn.input$Deck)
+knn.input$GroupSize <- as.factor(knn.input$GroupSize)
+knn.input$GroupSize <- as.numeric(knn.input$GroupSize)
+knn.input$Embarked <- as.factor(knn.input$Embarked)
+knn.input$Embarked <- as.numeric(knn.input$Embarked)
+knn.input$PCticket <- as.factor(knn.input$PCticket)
+knn.input$PCticket <- as.numeric(knn.input$PCticket)
+
+
+trainIndices = sample(seq(1:length(knn.input$Survived)),round(.7*length(knn.input$Survived)))
+knn.train = knn.input[trainIndices,]
+knn.test = knn.input[-trainIndices,]
+
+knnpredictions = knn(knn.train[,2:10],knn.test[,2:10],knn.train$Survived,k=5,prob = TRUE)
+table(knn.test$Survived,knnpredictions)
+confusionMatrix(table(knn.test$Survived,knnpredictions))
+    
+```
+
+Naive Bayes model
+
+```{r}
+
+features2 = c("AgeClass","AgeBin","Pclass","Sex","FareBin","Deck","GroupSize","Embarked","PCticket")
+
+
+model = naiveBayes(knn.train[,features2],as.factor(knn.train$Survived),laplace=1)
+confusionMatrix(table(predict(model,knn.test[,features2]),knn.test$Survived))
+
+```
+
+Logistic Regression Model 
+
+```{r logistic regression}
+logit.train <- knn.train
+logit.test <- knn.test
+
+model <- glm(Survived ~.,family=binomial(link='logit'),data=logit.train)
+
+summary(model)
+
+logit.train$SurvivalProbability <- predict(model, newdata = logit.train, type = "response")
+
+logit.train["Prediction"] = 0
+logit.train$Prediction[logit.train$SurvivalProbability>0.5] = 1
+logit.train$Prediction=as.factor(logit.train$Prediction)
+logit.train$Survived=as.factor(logit.train$Survived)
+
+confusionMatrix(logit.train$Prediction, logit.train$Survived)
+#80% accuracy on training set used in model
+
+logit.test$SurvivalProbability <- predict(model, newdata = logit.test, type = "response")
+
+logit.test["Prediction"] = 0
+logit.test$Prediction[logit.test$SurvivalProbability>0.5] = 1
+logit.test$Prediction=as.factor(logit.test$Prediction)
+logit.test$Survived=as.factor(logit.test$Survived)
+
+confusionMatrix(logit.test$Prediction, logit.test$Survived)
+#79.91% accuracy on training set used in model
+
+```
+
+Analyze misclassifications for logistic regression model and look for variables to optimize
+
+```{r optimize}
+
+#Create category for prediction accuracy
+logit.test <- logit.test %>% 
+  mutate(category = case_when(
+    Survived == 0 & Prediction == 0 ~ "True Negative",
+    Survived == 1 & Prediction == 1 ~ "True Positive",
+    Survived == 1 & Prediction == 0 ~ "False Negative",
+    Survived == 0 & Prediction == 1 ~ "False Positive",
+    TRUE ~ "other"
+  )
+)
+
+logit.test %>% group_by(category) %>% summarise(n = n())
+#Summary matches confusion matrix:
+#False Negative	21			
+#False Positive	22			
+#True Negative	103			
+#True Positive	68	
+
+#install.packages("esquisse")
+#remotes::update_packages("htmltools")
+#library(esquisse)
+
+#features2 = c("AgeClass","AgeBin","Pclass","Sex","FareBin","Deck","GroupSize","Embarked","PCticket")
+
+AgeBincategory = table(logit.test$AgeBin, logit.test$category)
+mosaicplot(AgeBincategory, shade = TRUE, las=2, main = "AgeBincategory", pop = FALSE)
+AgeBincategorychisq <- chisq.test(AgeBincategory) 
+AgeBincategorychisq #Significant higher false classifications for AgeBins 2,3,6
+
+Pclasscategory = table(logit.test$Pclass, logit.test$category)
+mosaicplot(Pclasscategory, shade = TRUE, las=2, main = "Pclasscategory", pop = FALSE)
+Pclasscategorychisq <- chisq.test(Pclasscategory) 
+Pclasscategorychisq #not significant for flase classifications
+
+Sexcategory = table(logit.test$Sex, logit.test$category)
+mosaicplot(Sexcategory, shade = TRUE, las=2, main = "Sexcategory", pop = FALSE)
+Sexcategorychisq <- chisq.test(Sexcategory) 
+Sexcategorychisq #Higher false positives for sex=1
+
+FareBincategory = table(logit.test$FareBin, logit.test$category)
+mosaicplot(FareBincategory, shade = TRUE, las=2, main = "FareBincategory", pop = FALSE)
+FareBincategorychisq <- chisq.test(FareBincategory) 
+FareBincategorychisq #Higher false for FareBin=1,4,6 especially look at 1
+
+logit.test %>% group_by(category,AgeBin) %>% summarise(n = n())
+view(logit.test)
+view(knn.test)
+```
