@@ -346,68 +346,17 @@ mosaicplot(AgeBin, shade = TRUE, las=2, main = "AgeBin", pop = FALSE)
 AgeBinchisq <- chisq.test(FareBin) 
 AgeBinchisq #p-value = 2.2e-16 much lower thn continuous variable, Bin under 5years is significant
 ```
-Explore Regression for Age to replace missing values
-
-```{r age regression}
-
-#Split Train & Test
-Age_cor <- titanic %>% select(-PassengerId,-Name,-AgeBin,-Ticket,-Cabin)
-trainIndices = sample(seq(1:length(Age_cor$Age)),round(.7*length(Age_cor$Age)))
-trainAge_cor = Age_cor[trainIndices,]
-testAge_cor = Age_cor[-trainIndices,]
-
-#Build Model with all variables to create baseline, then use base model for selection methods
-model <- lm(Age ~ ., data = trainAge_cor)
-summary(model)
-
-#Variable Selection Methods
-
-#Forward step selection 6 parameters included, RMSE = 12, Adj. R2=0.34
-step.forward <- ols_step_forward_p(model)
-step.forward
-
-#Backward step selection 3 parameters removed, RMSE = 12, Adj. R2=0.34
-step.backward <- ols_step_backward_p(model)
-step.backward
-
-#Decision Tree to predict Age
-library(rpart)
-#install.packages("rattle")
-library(rattle)
-library(rpart.plot)
-
-tree.age = rpart(Age~., data=trainAge_cor)
-print(tree.age$cptable)
-
-fancyRpartPlot(tree.age)
-
-cp <- min(tree.age$cptable[,1])
-pruned.tree.age <- prune(tree.age, cp=cp)
-
-testAge_cor_NAfilter <- testAge_cor %>% filter(Age != "NA")
-tree.age.predict <- predict(pruned.tree.age, testAge_cor_NAfilter, type="vector")
-str(tree.age.predict)
-str(testAge_cor_NAfilter$Age)
-confusionMatrix(tree.age.predict, testAge_cor_NAfilter$Age)
-
-tree.age.predict.int <- as.integer(tree.age.predict)
-str(tree.age.predict.int)
-str(testAge_cor_NAfilter$Age)
-confusionMatrix(tree.age.predict.int, testAge_cor_NAfilter$Age)
-
-plot(tree.age.predict.int, testAge_cor_NAfilter$Age)
-```
-
-
 
 Explore Decision Tree for AgeBin to replace missing values
 
 ```{r age regression}
 
 #Split Train & Test
-Age_cor <- titanic %>% select(-PassengerId,-Name,-Age,-Ticket,-Cabin) %>% filter(AgeBin != "NA")
+Age_cor <- titanic %>% select(-PassengerId,-Name,-Age,-Ticket,-Cabin,-Surname,-Ticket_Num,-AdjFareBin,-Survived,-Ticket_Pre) #%>% filter(AgeBin != "NA")
 Age_cor$AgeBin <- as.factor(Age_cor$AgeBin)
-trainIndices = sample(seq(1:length(Age_cor$Age)),round(.7*length(Age_cor$Age)))
+Age_cor$Title <- as.factor(Age_cor$Title)
+
+trainIndices = sample(seq(1:length(Age_cor$Title)),round(.7*length(Age_cor$Title)))
 trainAge_cor = Age_cor[trainIndices,]
 testAge_cor = Age_cor[-trainIndices,]
 
@@ -417,7 +366,7 @@ library(rpart)
 library(rattle)
 library(rpart.plot)
 
-tree.age = rpart(AgeBin~., data=trainAge_cor)
+tree.age = rpart(AgeBin~., data=trainAge_cor, method="class")
 print(tree.age$cptable)
 
 fancyRpartPlot(tree.age)
@@ -425,12 +374,22 @@ fancyRpartPlot(tree.age)
 cp <- min(tree.age$cptable[,1])
 pruned.tree.age <- prune(tree.age, cp=cp)
 
+fancyRpartPlot(pruned.tree.age)
+plotcp(pruned.tree.age)	
+summary(pruned.tree.age)
+print(pruned.tree.age)
+
+str(testAge_cor)
+pruned.tree.age$xlevels[["Title"]] <- union(pruned.tree.age$xlevels[["Title"]], levels(testAge_cor$Title))
+str(testAge_cor)
+str(pruned.tree.age)
+str(trainAge_cor)
+
 tree.age.predict <- predict(pruned.tree.age, testAge_cor, type="class")
 str(tree.age.predict)
 str(testAge_cor$AgeBin)
 confusionMatrix(tree.age.predict, testAge_cor$AgeBin)
-
-plot(tree.age.predict.int, testAge_cor$AgeBin)
+#Accuracy=90%% and confusion matrix shows that almost all predictions are within one adjacent bin
 ```
 
 
@@ -534,15 +493,10 @@ library(rpart.plot)
 features1 <- c("Survived","AgeClass","AgeBin","Pclass","Sex","FareBin","Deck","GroupSize","Embarked","PCticket")
 
 #Split Train & Test
-TreeInput <- titanic %>% select(Survived,AgeClass,AgeBin,Pclass,Sex,FareBin,Deck,GroupSize,Embarked,PCticket) %>% filter(AgeBin != "NA")
+TreeInput <- titanic %>% select(features1) %>% filter(AgeBin != "NA")
 TreeInput$AgeBin <- as.factor(TreeInput$AgeBin)
 
 view(TreeInput)
-
-trainIndices = sample(seq(1:length(TreeInput$Survived)),round(.7*length(TreeInput$Survived)))
-trainTreeInput = TreeInput[trainIndices,]
-testTreeInput = TreeInput[-trainIndices,]
-
 
 tree.survived = rpart(Survived~., data=trainTreeInput)
 print(tree.survived$cptable)
@@ -554,15 +508,15 @@ pruned.tree.survived <- prune(tree.survived, cp=cp)
 
 fancyRpartPlot(pruned.tree.survived)
 
-testTreeInput["SurvivalProbability"] <- predict(pruned.tree.survived, testTreeInput, type="vector")
+TreeInput["SurvivalProbability"] <- predict(pruned.tree.survived, TreeInput, type="vector")
 
-testTreeInput["Prediction"] = 0
-testTreeInput$Prediction[testTreeInput$SurvivalProbability>0.5] = 1
-testTreeInput$Prediction=as.factor(testTreeInput$Prediction)
-testTreeInput$Survived=as.factor(testTreeInput$Survived)
+TreeInput["Prediction"] = 0
+TreeInput$Prediction[TreeInput$SurvivalProbability>0.5] = 1
+TreeInput$Prediction=as.factor(TreeInput$Prediction)
+TreeInput$Survived=as.factor(TreeInput$Survived)
 
-confusionMatrix(testTreeInput$Prediction, testTreeInput$Survived)
-#Accuracy 80.84%
+confusionMatrix(TreeInput$Prediction, TreeInput$Survived)
+#Accuracy 84.59% note this is on the whole set not a test subset
 
 plot(testTreeInput$Prediction, testTreeInput$Survived)
 
@@ -575,6 +529,120 @@ testTreeInput %>% ggplot(aes(x=as.character(Survived),y=Prediction)) +
 testTreeInput %>% ggplot(aes(x = SurvivalProbability, fill=Survived)) + geom_histogram() +
 ggtitle("Probability Survived by Actual Survival") + xlab("Probability") + ylab("Count") +facet_wrap(~Survived,ncol=1)
 ```
+
+Process competitions test set and add features
+
+features to be used <- c("AgeClass","AgeBin","Pclass","Sex","FareBin","Deck","GroupSize","Embarked","PCticket")
+
+features that need to be created on test set <- c("AgeClass","AgeBin","FareBin","Deck","GroupSize","PCticket")
+
+```{r}
+str(competition)
+
+#Add AgeClass
+competition["AgeClass"]=competition$Age * competition$Pclass
+
+#Add AgeBin
+competition["AgeBin"] <- ifelse(competition$Age < 6, "00-05",
+                             ifelse((competition$Age > 5 & competition$Age <11), "06-10",
+                             ifelse((competition$Age > 10 & competition$Age <16), "11-15",
+                             ifelse((competition$Age > 15 & competition$Age <21), "16-20",
+                             ifelse((competition$Age > 20 & competition$Age <31), "21-30",
+                             ifelse((competition$Age > 30 & competition$Age <41), "31-40",
+                             ifelse((competition$Age > 40 & competition$Age <51), "41-50",
+                             ifelse((competition$Age > 50 & competition$Age <61), "51-60",
+                             ifelse((competition$Age > 60 & competition$Age <71), "61-70",
+                             ifelse((competition$Age > 70 & competition$Age <81), "71-80",
+                             ifelse((competition$Age > 80 & competition$Age <91), "81-90",
+                             ifelse((competition$Age > 90 & competition$Age <100), "91-99",
+                                                                        "99+"))))))))))))
+
+#Add FareBin
+competition["FareBin"] <- ifelse(competition$Fare < 6, "00-05",
+                             ifelse((competition$Fare > 5 & competition$Fare <11), "06-10",
+                             ifelse((competition$Fare > 10 & competition$Fare <16), "11-15",
+                             ifelse((competition$Fare > 15 & competition$Fare <21), "16-20",
+                             ifelse((competition$Fare > 20 & competition$Fare <31), "21-30",
+                             ifelse((competition$Fare > 30 & competition$Fare <41), "31-40",
+                             ifelse((competition$Fare > 40 & competition$Fare <51), "41-50",
+                             ifelse((competition$Fare > 50 & competition$Fare <61), "51-60",
+                             ifelse((competition$Fare > 60 & competition$Fare <71), "61-70",
+                             ifelse((competition$Fare > 70 & competition$Fare <81), "71-80",
+                             ifelse((competition$Fare > 80 & competition$Fare <91), "81-90",
+                             ifelse((competition$Fare > 90 & competition$Fare <100), "91-99",
+                                                                        "99+"))))))))))))
+competition["AdjFare"] = competition$Fare/(competition$Parch + competition$SibSp + 1)
+
+
+#Add Deck
+competition$Deck <- substr(competition$Cabin, 1, 1)
+competition$Deck[competition$Deck == ""] <- "Unkown"
+
+#Add Groupsize
+competition["TravelGroup"] = competition$Parch + competition$SibSp
+competition["GroupSize"] = "Alone"
+competition$GroupSize[competition$TravelGroup>0 & competition$TravelGroup<4] <- "Small"
+competition$GroupSize[competition$TravelGroup>3] <- "Large"
+competition["Alone"] = "NO"
+competition$Alone[competition$TravelGroup==0] <- "YES"
+
+
+#Add PCticket
+competition$Ticket_Pre <- sapply(competition$Ticket, FUN=function(x) {ifelse(str_detect(x, " "),str_split(x, " ")[[1]][1],'None')})
+competition$Ticket_Pre <- as.factor(str_to_upper(str_replace_all(competition$Ticket_Pre, "[./]", "")))
+competition$Ticket_Num <- sapply(competition$Ticket, FUN=function(x) {ifelse(str_detect(x, " "),str_split(x, " ")[[1]][2], as.character(x))})
+competition["PCticket"] <- "NO"
+competition$PCticket[competition$Ticket_Pre=="PC"] <- "YES"
+
+
+#Add Title & Gender for AgeBin prediction
+competition$Title <- substring(competition$Name,regexpr(",",competition$Name)+2,regexpr("\\.",competition$Name)-1)
+competition$Title <- as.factor(competition$Title)
+competition$Gender[competition$Title %in% c("Capt","Don","Major","Col","Rev","Dr","Sir","Mr","Jonkheer")] <- "man"
+competition$Gender[competition$Title %in% c("Dona","the Countess","Mme","Mlle","Ms","Miss","Lady","Mrs")] <- "woman"
+competition$Gender[competition$Title %in% c("Master")] <- "boy"
+competition$Gender[competition$Gender=="woman" & competition$Age<11] <- "girl"
+
+#Competition test set has one observation with title "Dona" which was not in training set. Replacing this with "Don" so that the AgeBin model built from training data may be used.
+str(competition$Title)
+competition$Title <- factor(competition$Title, levels = c(levels(competition$Title), "Don"))
+competition$Title[competition$Title=="Dona"] <- "Don"
+competition$Title <- droplevels(competition$Title)
+str(competition$Title)
+
+
+#Use decision tree to replace AgeBin=NA
+competition["AgeBinPrediction"] <- predict(pruned.tree.age, competition, type="class")
+str(pruned.tree.age)
+str(competition$Title)
+str(trainAge_cor$Title)
+str(competition$AgeBinPrediction)
+str(competition$AgeBin)
+competition$AgeBin <- as.factor(competition$AgeBin)
+confusionMatrix(competition$AgeBinPrediction, competition$AgeBin)
+
+competition$AgeBin[is.na(competition$AgeBin)] <- competition$AgeBinPrediction[is.na(competition$AgeBin)]
+
+
+```
+
+Use Decision tree to predict survival on competition test set
+
+```{r}
+
+competition["SurvivalProbability"] <- predict(pruned.tree.survived, competition, type="vector")
+
+competition["Survived"] = 0
+competition$Survived[competition$SurvivalProbability>0.5] = 1
+competition$Survived=as.factor(competition$Survived)
+
+submission1 <- competition %>% select(PassengerId,Survived)
+
+write.csv(submission1,"/Users/rickfontenot/Dropbox/SMU/Kaggle/Titanic2/Titanic1.csv", row.names = FALSE)
+
+```
+
+
 
 knn model
 
@@ -705,4 +773,68 @@ FareBincategorychisq #Higher false for FareBin=1,4,6 especially look at 1
 logit.test %>% group_by(category,AgeBin) %>% summarise(n = n())
 view(logit.test)
 view(knn.test)
+```
+
+Use whole train set for decision tree then make predictions with kaggle test set
+
+```{r decision tree}
+#Decision Tree to predict Survival
+#library(rpart)
+#install.packages("rattle")
+#library(rattle)
+#library(rpart.plot)
+
+features1 <- c("Survived","AgeClass","AgeBin","Pclass","Sex","FareBin","Deck","GroupSize","Embarked","PCticket")
+
+#Load full training set
+TreeInput <- titanic %>% select(Survived,AgeClass,AgeBin,Pclass,Sex,FareBin,Deck,GroupSize,Embarked,PCticket) %>% filter(AgeBin != "NA")
+TreeInput$AgeBin <- as.factor(TreeInput$AgeBin)
+
+view(TreeInput)
+
+tree.survived = rpart(Survived~., data=TreeInput)
+print(tree.survived$cptable)
+
+fancyRpartPlot(tree.survived)
+
+cp <- min(tree.survived$cptable[,1])
+pruned.tree.survived <- prune(tree.survived, cp=cp)
+
+fancyRpartPlot(pruned.tree.survived)
+
+#Check confusion matrix on the training set
+TreeInput["SurvivalProbability"] <- predict(pruned.tree.survived, TreeInput, type="vector")
+
+TreeInput["Prediction"] = 0
+TreeInput$Prediction[TreeInput$SurvivalProbability>0.5] = 1
+TreeInput$Prediction=as.factor(TreeInput$Prediction)
+TreeInput$Survived=as.factor(TreeInput$Survived)
+
+confusionMatrix(TreeInput$Prediction, TreeInput$Survived)
+#Accuracy 83.75%
+
+
+#Load kaggle test set and process variables needed
+ 
+
+competition["SurvivalProbability"] <- predict(pruned.tree.survived, testTreeInput, type="vector")
+
+competition["Prediction"] = 0
+competition$Prediction[competition$SurvivalProbability>0.5] = 1
+competition$Prediction=as.factor(competition$Prediction)
+competition$Survived=as.factor(competition$Survived)
+
+confusionMatrix(testTreeInput$Prediction, testTreeInput$Survived)
+#Accuracy 80.84%
+
+plot(testTreeInput$Prediction, testTreeInput$Survived)
+
+testTreeInput %>% ggplot(aes(x=as.character(Survived),y=Prediction)) + 
+  geom_boxplot()+ labs(title= "Prediction vs Survived" , x = "Survived", y= "Prediction")
+
+testTreeInput %>% ggplot(aes(x=as.character(Survived),y=Prediction)) + 
+  geom_boxplot()+ labs(title= "Prediction vs Survived" , x = "Survived", y= "Prediction")
+
+testTreeInput %>% ggplot(aes(x = SurvivalProbability, fill=Survived)) + geom_histogram() +
+ggtitle("Probability Survived by Actual Survival") + xlab("Probability") + ylab("Count") +facet_wrap(~Survived,ncol=1)
 ```
